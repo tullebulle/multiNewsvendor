@@ -1027,7 +1027,7 @@ def run_experiment_12(r: int = 40,
     # Main loop over m
     for m in m_vals:
         rep_errors = {pair: [] for pair in bh_pairs}
-        rep_cost_errors = {pair: [] for pair in bh_pairs}
+        rep_rel_cost_errors = {pair: [] for pair in bh_pairs}
 
         for _ in range(r):
             samples = [np.random.lognormal(mu, sigma, m)]
@@ -1043,14 +1043,14 @@ def run_experiment_12(r: int = 40,
                 # Cost error: |cost(q_hat) - cost(q_ref)|
                 cost_hat = empirical_cost(q_hat, b, h, cost_eval_samples)
                 cost_star = empirical_cost(q_ref[(b, h)], b, h, cost_eval_samples)
-                rep_cost_errors[(b, h)].append(abs(cost_hat - cost_star))
+                rep_rel_cost_errors[(b, h)].append(abs(cost_hat - cost_star) / cost_star)
 
         # aggregate mean / std for this m
         for pair in bh_pairs:
             err_mean[pair].append(np.mean(rep_errors[pair]))
             err_std [pair].append(np.std (rep_errors[pair]))
-            cost_err_mean[pair].append(np.mean(rep_cost_errors[pair]))
-            cost_err_std [pair].append(np.std (rep_cost_errors[pair]))
+            cost_err_mean[pair].append(np.mean(rep_rel_cost_errors[pair]))
+            cost_err_std[pair].append(np.std (rep_rel_cost_errors[pair]))
 
         # pretty progress line
         prog = "  |  ".join(
@@ -1081,7 +1081,7 @@ def run_experiment_12(r: int = 40,
     plt.xscale('log'); plt.yscale('log')
     plt.xlabel('sample size  $m$', fontsize=14)
     plt.ylabel(title_string, fontsize=14)
-    plt.title('Relative error for various (b, h) pairs')
+    plt.title('Relative allocation error, log-normal distribution')
     plt.legend(fontsize=12)
     plt.tight_layout()
     plt.savefig('experiment12_bh_convergence.png', dpi=300)
@@ -1104,11 +1104,11 @@ def run_experiment_12(r: int = 40,
 
     plt.xscale('log'); plt.yscale('log')
     plt.xlabel('sample size  $m$', fontsize=14)
-    plt.ylabel( r'$\; \mathbb{E}[\,|C(\hat q) - C(q^*)|\,]$', fontsize=14)
-    plt.title('Cost error for various (b, h) pairs', fontsize=12)
+    plt.ylabel( r'$\; \mathbb{E}[\,|C(\hat q) - C(q^*)| / C(q^*)\,]$', fontsize=14)
+    plt.title('Relative cost error, log-normal distribution', fontsize=12)
     plt.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig('experiment12_bh_cost_error.png', dpi=300)
+    plt.savefig('experiment12_bh_rel_cost_error.png', dpi=300)
     plt.show()
 
     # Slopes
@@ -1130,6 +1130,188 @@ def run_experiment_12(r: int = 40,
                 cost_err_std=cost_err_std,
                 slopes  =slopes,
                 q_ref   =q_ref)
+
+
+
+def run_experiment_12_version2(r: int = 40,
+                      bh_pairs=((100, 1), (1, 100), (100, 100), (1, 1)),
+                      h_base: float = 1.0,
+                      error_type: str = "relative"):
+    """
+    Experiment 12 — k = 1, convergence for specific (b, h) pairs.
+
+    Compares convergence for:
+        (b, h) = (100, 1), (100, 100), (1, 100), (1, 1)
+
+    For every sample size m, run `r` independent repetitions,
+    average the relative error, and plot mean ± 1 s.d.
+
+    Additionally, plots the error in terms of |cost(hat q) - cost(q*)|,
+    where cost is estimated using a very large sample from the true distribution.
+
+    Parameters
+    ----------
+    r        : int
+        Number of repetitions per sample size m.
+    bh_pairs : iterable of tuples
+        List of (b, h) pairs to test.
+    h_base   : float
+        Not used, kept for interface consistency.
+    error_type : str
+        "relative" or "absolute"
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from itertools import cycle
+
+    # Problem setup
+    np.random.seed(42)
+    mu, sigma = 4.0, 0.5                    # log-normal demand parameters
+    Q_big     = 1_000_000.0                 # capacity never binds
+
+    m_ref  = 200_000                        # "ground truth" sample size
+    m_vals = [5, 10, 20, 50, 100, 200,
+              500, 1_000, 2_000, 5_000,
+              10_000, 20_000, 50_000]
+
+    print(f"\n=== EXPERIMENT 12   (r = {r})   for (b, h) pairs ===")
+
+    # generate one huge reference sample once (re-used for all pairs)
+    triangle_left = 0.0
+    triangle_mode = 50.0
+    triangle_right = 100.0
+    ref_samples = [np.random.triangular(triangle_left, triangle_mode, triangle_right, m_ref)]
+
+    # Containers
+    err_mean = {pair: [] for pair in bh_pairs}
+    err_std  = {pair: [] for pair in bh_pairs}
+    cost_err_mean = {pair: [] for pair in bh_pairs}
+    cost_err_std  = {pair: [] for pair in bh_pairs}
+    slopes   = {}
+
+    # Reference solutions for each (b, h) pair
+    q_ref = {}
+    for b, h in bh_pairs:
+        q_ref[(b, h)] = find_optimal_allocation(ref_samples, [b], [h], Q_big)[0]
+        print(f"(b, h) = ({b:>3}, {h:>3})  ⇒  q* = {q_ref[(b, h)]:.3f}")
+
+    # Large sample for cost estimation (true distribution)
+    cost_eval_samples = np.random.triangular(triangle_left, triangle_mode, triangle_right, 500_000)
+
+    def empirical_cost(q, b, h, demand_samples):
+        # q, b, h are scalars; demand_samples is 1D array
+        over = np.maximum(q - demand_samples, 0)
+        under = np.maximum(demand_samples - q, 0)
+        return np.mean(b * under + h * over)
+
+    # Main loop over m
+    for m in m_vals:
+        rep_errors = {pair: [] for pair in bh_pairs}
+        rep_rel_cost_errors = {pair: [] for pair in bh_pairs}
+
+        for _ in range(r):
+            samples = [np.random.triangular(triangle_left, triangle_mode, triangle_right, m)]
+
+            for b, h in bh_pairs:
+                q_hat = find_optimal_allocation(samples, [b], [h], Q_big)[0]
+                if error_type == "relative":
+                    rel_err = abs(q_hat - q_ref[(b, h)]) / q_ref[(b, h)]
+                elif error_type == "absolute":
+                    rel_err = abs(q_hat - q_ref[(b, h)])
+                rep_errors[(b, h)].append(rel_err)
+
+                # Cost error: |cost(q_hat) - cost(q_ref)|
+                cost_hat = empirical_cost(q_hat, b, h, cost_eval_samples)
+                cost_star = empirical_cost(q_ref[(b, h)], b, h, cost_eval_samples)
+                rep_rel_cost_errors[(b, h)].append(abs(cost_hat - cost_star) / cost_star)
+
+        # aggregate mean / std for this m
+        for pair in bh_pairs:
+            err_mean[pair].append(np.mean(rep_errors[pair]))
+            err_std [pair].append(np.std (rep_errors[pair]))
+            cost_err_mean[pair].append(np.mean(rep_rel_cost_errors[pair]))
+            cost_err_std[pair].append(np.std (rep_rel_cost_errors[pair]))
+
+        # pretty progress line
+        prog = "  |  ".join(
+            f"(b={b:>3},h={h:>3}): μ={err_mean[(b,h)][-1]:.3e}, μΔC={cost_err_mean[(b,h)][-1]:.3e}"
+            for (b, h) in bh_pairs)
+        print(f"m = {m:6d}  |  {prog}")
+
+    # Plotting: relative error
+    plt.figure(figsize=(6, 4))
+    markers = cycle(['o', 's', 'v', '^', 'D', 'P', 'X'])
+    for (b, h), mark in zip(bh_pairs, markers):
+        # plt.errorbar(m_vals, err_mean[(b, h)], yerr=err_std[(b, h)],
+        #              fmt=f'{mark}-', capsize=3,
+        #              label=f'(b={b}, h={h})')
+        if (b, h) == (100, 100):
+            plt.plot(m_vals, err_mean[(b, h)], label=f'(b={b}, h={h})', lw=2)
+        else:
+            plt.plot(m_vals, err_mean[(b, h)], label=f'(b={b}, h={h})', lw=1)
+
+    # reference m^{-1/2} line from the *first* pair
+    ref_x = np.array([m_vals[0], m_vals[-1]])
+    first_pair = bh_pairs[0]
+    ref_y = err_mean[first_pair][0] * (ref_x / m_vals[0])**(-0.5)
+    plt.loglog(ref_x, ref_y, 'k--', label=r'$O(m^{-1/2})$')
+    title_string = r'$\; \mathbb{E}[\,|\hat q - q^*|\,/\,q^*]$'
+    if error_type == "absolute":
+        title_string = r'$\; \mathbb{E}[\,|\hat q - q^*|\,]$'
+    plt.xscale('log'); plt.yscale('log')
+    plt.xlabel('sample size  $m$', fontsize=14)
+    plt.ylabel(title_string, fontsize=14)
+    plt.title('Relative allocation error, triangular distribution')
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('experiment12_version2_bh_convergence.png', dpi=300)
+    plt.show()
+
+    # Plotting: cost error
+    plt.figure(figsize=(6, 4))
+    markers = cycle(['o', 's', 'v', '^', 'D', 'P', 'X'])
+    for (b, h), mark in zip(bh_pairs, markers):
+            # plt.errorbar(m_vals, cost_err_mean[(b, h)], yerr=cost_err_std[(b, h)],
+            #             fmt=f'{mark}-', capsize=3,
+            #             label=f'(b={b}, h={h})')
+        if (b, h) == (100, 100):
+            plt.plot(m_vals, cost_err_mean[(b, h)], label=f'(b={b}, h={h})', lw=2)
+        else:
+            plt.plot(m_vals, cost_err_mean[(b, h)], label=f'(b={b}, h={h})', lw=1)
+    # reference m^{-1/2} line from the *first* pair, scaled to cost error
+    # ref_y_cost = cost_err_mean[first_pair][0] * (ref_x / m_vals[0])**(-0.5)
+    # plt.loglog(ref_x, ref_y_cost, 'k--', label=r'$O(m^{-1/2})$')
+
+    plt.xscale('log'); plt.yscale('log')
+    plt.xlabel('sample size  $m$', fontsize=14)
+    plt.ylabel( r'$\; \mathbb{E}[\,|C(\hat q) - C(q^*)| / C(q^*)\,]$', fontsize=14)
+    plt.title('Relative cost error, triangular distribution', fontsize=12)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('experiment12_version2_bh_rel_cost_error.png', dpi=300)
+    plt.show()
+
+    # Slopes
+    for pair in bh_pairs:
+        slopes[pair] = np.mean([
+            np.log(err_mean[pair][i-1] / err_mean[pair][i]) /
+            np.log(m_vals[i]          /  m_vals[i-1])
+            for i in range(1, len(m_vals))
+        ])
+    print("\nEmpirical average slopes:")
+    for pair in bh_pairs:
+        print(f"   (b={pair[0]:>3}, h={pair[1]:>3}) :  ≈  m^{slopes[pair]:.3f}")
+
+    return dict(m_vals=m_vals,
+                bh_pairs=bh_pairs,
+                err_mean=err_mean,
+                err_std =err_std,
+                cost_err_mean=cost_err_mean,
+                cost_err_std=cost_err_std,
+                slopes  =slopes,
+                q_ref   =q_ref)
+
+
 
 def run_experiment_13(
         r: int = 40,
@@ -1432,41 +1614,41 @@ def run_experiment_14_symm_ratios(
     # ---------------------------------------------------  plots
     markers = cycle(['o', 's', 'v', '^', 'D', 'X', 'P'])
     # 1) relative allocation error
-    # plt.figure(figsize=(6, 4))
-    # for ρ, mk in zip(ratios, markers):
-    #         # plt.errorbar(m_vals, rel_mean[ρ], yerr=rel_std[ρ],
-    #         #             fmt=f'{mk}-', capsize=3, label=f'ρ={ρ}')
-    #     plt.plot(m_vals, rel_mean[ρ], label=f'ρ={ρ}')
-    # ref_x = np.array([m_vals[0], m_vals[-1]])
-    # ref_y = rel_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
-    # # plt.loglog(ref_x, ref_y, 'k--', label=r'$O(m^{-1/2})$')
-    # plt.xscale('log'); plt.yscale('log')
-    # plt.xlabel('sample size  $m$', fontsize=14)
-    # plt.ylabel(r'$\mathbb{E}[\,|\hat q - q^*|/q^*]$', fontsize=14)
-    # plt.title('Experiment 14 – allocation error (symmetric demand)', fontsize=16)
-    # plt.legend(fontsize=12)
-    # plt.tight_layout()
-    # plt.savefig('experiment14_alloc_error.png', dpi=300)
-    # plt.show()
-
-    # 2) cost error
     plt.figure(figsize=(6, 4))
-    marker_cycle = cycle(['o', 's', 'v', '^', 'D', 'X', 'P'])
-    for ρ, mk in zip(ratios, marker_cycle):
-        # plt.errorbar(m_vals, cost_mean[ρ], yerr=cost_std[ρ],
-        #              fmt=f'{mk}-', capsize=3, label=f'b/h={ρ}')
-        plt.plot(m_vals, cost_mean[ρ], label=f'b/h={ρ}')
-    # ref_yc = cost_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
-    # plt.loglog(ref_x, ref_yc, 'k--', label=r'$O(m^{-1/2})$')
+    for ρ, mk in zip(ratios, markers):
+            # plt.errorbar(m_vals, rel_mean[ρ], yerr=rel_std[ρ],
+            #             fmt=f'{mk}-', capsize=3, label=f'ρ={ρ}')
+        plt.plot(m_vals, rel_mean[ρ], label=f'b/h={ρ}')
+    ref_x = np.array([m_vals[0], m_vals[-1]])
+    ref_y = rel_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
+    # plt.loglog(ref_x, ref_y, 'k--', label=r'$O(m^{-1/2})$')
     plt.xscale('log'); plt.yscale('log')
-    plt.grid(True, alpha=0.3)
     plt.xlabel('sample size  $m$', fontsize=14)
-    plt.ylabel(r'$\mathbb{E}[\,|C(\hat q)-C(q^*)|\,]$', fontsize=14)
-    plt.title('Cost error, triangular distribution', fontsize=12)
+    plt.ylabel(r'$\mathbb{E}[\,|\hat q - q^*|/q^*]$', fontsize=14)
+    plt.title('Relative allocation error, triangular distribution', fontsize=16)
     plt.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig('experiment14_cost_error.png', dpi=300)
+    plt.savefig('experiment14_alloc_error.png', dpi=300)
     plt.show()
+
+    # 2) cost error
+    # plt.figure(figsize=(6, 4))
+    # marker_cycle = cycle(['o', 's', 'v', '^', 'D', 'X', 'P'])
+    # for ρ, mk in zip(ratios, marker_cycle):
+    #     # plt.errorbar(m_vals, cost_mean[ρ], yerr=cost_std[ρ],
+    #     #              fmt=f'{mk}-', capsize=3, label=f'b/h={ρ}')
+    #     plt.plot(m_vals, cost_mean[ρ], label=f'b/h={ρ}')
+    # # ref_yc = cost_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
+    # # plt.loglog(ref_x, ref_yc, 'k--', label=r'$O(m^{-1/2})$')
+    # plt.xscale('log'); plt.yscale('log')
+    # plt.grid(True, alpha=0.3)
+    # plt.xlabel('sample size  $m$', fontsize=14)
+    # plt.ylabel(r'$\mathbb{E}[\,|C(\hat q)-C(q^*)|\,]$', fontsize=14)
+    # plt.title('Cost error, triangular distribution', fontsize=12)
+    # plt.legend(fontsize=12)
+    # plt.tight_layout()
+    # plt.savefig('experiment14_cost_error.png', dpi=300)
+    # plt.show()
     
     # 3) relative cost error
     plt.figure(figsize=(6, 4))
@@ -1507,6 +1689,207 @@ def run_experiment_14_symm_ratios(
                 slopes=slopes,
                 q_ref=q_ref)
 
+
+def run_experiment_15(
+        r: int = 100,
+        ratios=(1, 10, 100, 1000),
+        h_base: float = 1.0,
+        tri_left: float = 0.0,
+        tri_mode: float = 50.0,
+        tri_right: float = 100.0):
+    """
+    Experiment 14 – symmetric demand, varying b/h ratios (k = 1).
+
+    Demand  D ~ Triangular(left, mode, right) with mode in the middle,
+    hence the pdf is *symmetric* about  (left+right)/2.
+
+    We investigate how the ratio ρ = b/h ∈ {1, 10, 100, 1000}
+    affects convergence of
+
+        • relative allocation error      |q̂ − q*| / q*
+        • cost error                     |C(q̂) − C(q*)|
+
+    Both errors are averaged over `r` independent repetitions for each
+    sample size m and displayed with ±1 s.d. error bars.
+
+    Parameters
+    ----------
+    r        : int
+        Number of repetitions per sample size m.
+    ratios   : iterable
+        Desired b/h ratios (holding cost fixed at ``h_base``).
+    h_base   : float
+        Holding cost h (kept constant);  b = ratio * h_base.
+    tri_left, tri_mode, tri_right : float
+        Parameters of the symmetric triangular demand distribution.
+    """
+    # ------------------ imports (local to avoid polluting global ns)
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from itertools import cycle
+
+    # ------------------ helper functions
+    def sample_demand(size: int) -> np.ndarray:
+        """Draw `size` samples from the symmetric triangular distribution."""
+        np.random.seed(42)
+        mu, sigma = 4.0, 0.5   
+        return np.random.lognormal(mu, sigma, size)
+
+    def empirical_cost(q: float, b: float, h: float,
+                       demand_samples: np.ndarray) -> float:
+        """Monte-Carlo estimate of the news-vendor cost at quantity q."""
+        over  = np.maximum(q - demand_samples, 0.0)
+        under = np.maximum(demand_samples - q, 0.0)
+        return np.mean(b * under + h * over)
+
+    # ------------------ experimental set-up
+    np.random.seed(42)
+    Q_big  = 1_000_000.0                     # capacity never binds
+    m_ref  = 200_000                         # "ground-truth" sample size
+    m_vals = [5, 10, 20, 50, 100, 200,
+              500, 1_000, 2_000, 5_000,
+              10_000, 20_000, 50_000]
+
+    print(f"\n=== EXPERIMENT 14 – symmetric demand, b/h ratios {ratios} "
+          f"(r = {r}) ===")
+
+    # large reference sample (shared for all ratios)
+    ref_samples = [sample_demand(m_ref)]
+
+    # evaluation sample for cost error
+    eval_samples = sample_demand(500_000)
+
+    # reference solutions q*
+    q_ref = {}
+    for rho in ratios:
+        b_val, h_val = rho * h_base, h_base
+        q_ref[rho]   = find_optimal_allocation(ref_samples,
+                                               [b_val], [h_val], Q_big)[0]
+        print(f"ρ={rho:4}:  b={b_val:>6.1f}, h={h_val:>4.1f} "
+              f"→  q* = {q_ref[rho]:.3f}")
+
+    # containers for statistics
+    rel_mean, rel_std   = {ρ: [] for ρ in ratios}, {ρ: [] for ρ in ratios}
+    cost_mean, cost_std = {ρ: [] for ρ in ratios}, {ρ: [] for ρ in ratios}
+    rel_cost_mean, rel_cost_std = {ρ: [] for ρ in ratios}, {ρ: [] for ρ in ratios}
+    slopes              = {}
+
+    # ---------------------------------------------------  loops
+    for m in m_vals:
+        rep_rel  = {ρ: [] for ρ in ratios}
+        rep_cost = {ρ: [] for ρ in ratios}
+        rep_rel_cost = {ρ: [] for ρ in ratios}
+        for _ in range(r):
+            samp = [sample_demand(m)]
+            for ρ in ratios:
+                b_val, h_val = ρ * h_base, h_base
+                q_hat   = find_optimal_allocation(samp, [b_val], [h_val], Q_big)[0]
+
+                # relative allocation error
+                rep_rel[ρ].append(abs(q_hat - q_ref[ρ]) / q_ref[ρ])
+
+                # cost error
+                C_hat  = empirical_cost(q_hat,     b_val, h_val, eval_samples)
+                C_star = empirical_cost(q_ref[ρ], b_val, h_val, eval_samples)
+                rep_cost[ρ].append(abs(C_hat - C_star))
+
+                # relative cost error
+                rep_rel_cost[ρ].append(abs(C_hat - C_star) / C_star)
+
+        # aggregate stats for current m
+        for ρ in ratios:
+            rel_mean [ρ].append(np.mean(rep_rel [ρ]))
+            rel_std [ρ].append(np.std (rep_rel [ρ]))
+            cost_mean[ρ].append(np.mean(rep_cost[ρ]))
+            cost_std[ρ].append(np.std (rep_cost[ρ]))
+            rel_cost_mean[ρ].append(np.mean(rep_rel_cost[ρ]))
+            rel_cost_std[ρ].append(np.std (rep_rel_cost[ρ]))
+
+        # progress print-out
+        prog = " | ".join(f"ρ={ρ:>4}: μ={rel_mean[ρ][-1]:.2e}"
+                          for ρ in ratios)
+        print(f"m={m:6d} | {prog}")
+
+    # ---------------------------------------------------  plots
+    markers = cycle(['o', 's', 'v', '^', 'D', 'X', 'P'])
+    # 1) relative allocation error
+    plt.figure(figsize=(6, 4))
+    for ρ, mk in zip(ratios, markers):
+            # plt.errorbar(m_vals, rel_mean[ρ], yerr=rel_std[ρ],
+            #             fmt=f'{mk}-', capsize=3, label=f'ρ={ρ}')
+        plt.plot(m_vals, rel_mean[ρ], label=f'b/h={ρ}')
+    ref_x = np.array([m_vals[0], m_vals[-1]])
+    ref_y = rel_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
+    # plt.loglog(ref_x, ref_y, 'k--', label=r'$O(m^{-1/2})$')
+    plt.xscale('log'); plt.yscale('log')
+    plt.xlabel('sample size  $m$', fontsize=14)
+    plt.ylabel(r'$\mathbb{E}[\,|\hat q - q^*|/q^*]$', fontsize=14)
+    plt.title('Relative allocation error, log-normal distribution', fontsize=16)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('experiment15_alloc_error.png', dpi=300)
+    plt.show()
+
+    # 2) cost error
+    # plt.figure(figsize=(6, 4))
+    # marker_cycle = cycle(['o', 's', 'v', '^', 'D', 'X', 'P'])
+    # for ρ, mk in zip(ratios, marker_cycle):
+    #     # plt.errorbar(m_vals, cost_mean[ρ], yerr=cost_std[ρ],
+    #     #              fmt=f'{mk}-', capsize=3, label=f'b/h={ρ}')
+    #     plt.plot(m_vals, cost_mean[ρ], label=f'b/h={ρ}')
+    # # ref_yc = cost_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
+    # # plt.loglog(ref_x, ref_yc, 'k--', label=r'$O(m^{-1/2})$')
+    # plt.xscale('log'); plt.yscale('log')
+    # plt.grid(True, alpha=0.3)
+    # plt.xlabel('sample size  $m$', fontsize=14)
+    # plt.ylabel(r'$\mathbb{E}[\,|C(\hat q)-C(q^*)|\,]$', fontsize=14)
+    # plt.title('Cost error, triangular distribution', fontsize=12)
+    # plt.legend(fontsize=12)
+    # plt.tight_layout()
+    # plt.savefig('experiment14_cost_error.png', dpi=300)
+    # plt.show()
+    
+    # 3) relative cost error
+    plt.figure(figsize=(6, 4))
+    marker_cycle = cycle(['o', 's', 'v', '^', 'D', 'X', 'P'])
+    for ρ, mk in zip(ratios, marker_cycle):
+        # plt.errorbar(m_vals, cost_mean[ρ], yerr=cost_std[ρ],
+        #              fmt=f'{mk}-', capsize=3, label=f'b/h={ρ}')
+        plt.plot(m_vals, rel_cost_mean[ρ], label=f'b/h={ρ}')
+    # ref_yc = cost_mean[ratios[0]][0] * (ref_x / ref_x[0])**(-0.5)
+    # plt.loglog(ref_x, ref_yc, 'k--', label=r'$O(m^{-1/2})$')
+    plt.xscale('log'); plt.yscale('log')
+    plt.grid(True, alpha=0.3)
+    plt.xlabel('sample size  $m$', fontsize=14)
+    plt.ylabel(r'$\mathbb{E}[\,|C(\hat q)-C(q^*)|/C(q^*)\,]$', fontsize=14)
+    plt.title('Relative cost error, log-normal distribution', fontsize=12)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('experiment15_rel_cost_error.png', dpi=300)
+    plt.show()
+
+    # ------------------ compute slopes for allocation error
+    for ρ in ratios:
+        slopes[ρ] = np.mean([
+            np.log(rel_mean[ρ][i-1]/rel_mean[ρ][i]) /
+            np.log(m_vals[i]     /m_vals[i-1])
+            for i in range(1, len(m_vals))
+        ])
+
+    print("\nEmpirical average slopes (allocation error):")
+    for ρ in ratios:
+        print(f"   ρ={ρ:>4}  →  m^{slopes[ρ]:.3f}")
+
+    # ------------------ return dictionary of results
+    return dict(m_vals=m_vals,
+                ratios=ratios,
+                rel_mean=rel_mean, rel_std=rel_std,
+                cost_mean=cost_mean, cost_std=cost_std,
+                slopes=slopes,
+                q_ref=q_ref)
+
+
+
 if __name__ == "__main__":
     # np.random.seed(42)  # For reproducibility
     # run_experiment_1()
@@ -1518,6 +1901,8 @@ if __name__ == "__main__":
     # run_experiment_9(error_type="relative") # 
     # run_experiment_10()
     # run_experiment_11()
-    # run_experiment_12(error_type="relative")
+    run_experiment_12(error_type="relative")
+    # run_experiment_12_version2(error_type="relative")
     # run_experiment_13_symm()
-    run_experiment_14_symm_ratios()
+    # run_experiment_14_symm_ratios()
+    # run_experiment_15()
